@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --warning: #d97706;
+}
+
+body {
+  font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
+}
+
+/* Leaflet overrides */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+/* Custom scrollbar */
+.sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+/* Tab styling */
+.tab-active {
+  @apply border-b-2 border-blue-600 text-blue-600 font-semibold;
+}
+.tab-inactive {
+  @apply text-gray-500 hover:text-gray-700;
+}
+
+/* Card */
+.analysis-card {
+  @apply bg-white rounded-lg shadow-sm border border-gray-200 p-4;
+}
+
+/* Loading spinner */
+.spinner {
+  @apply animate-spin rounded-full h-5 w-5 border-2 border-gray-300 border-t-blue-600;
+}
+
+/* Table */
+.data-table {
+  @apply w-full text-sm text-left;
+}
+.data-table thead {
+  @apply bg-gray-50 text-gray-600 uppercase text-xs;
+}
+.data-table th {
+  @apply px-4 py-3 font-medium;
+}
+.data-table td {
+  @apply px-4 py-3 border-t border-gray-100;
+}
+.data-table tbody tr:hover {
+  @apply bg-gray-50;
+}
