@@ -54,10 +54,10 @@ export default function HuffTab({ stores, populationCells, onHuffResult }: HuffT
   };
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <h2 className="text-xl font-bold text-gray-800 mb-4">ハフモデル分析</h2>
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto">
+      <h2 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">ハフモデル分析</h2>
 
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3 sm:p-4 mb-4">
         <div className="text-xs text-gray-500 mb-3">
           Pij = (Aj^α / dij^β) / Σ(Ak^α / dik^β)
         </div>
@@ -146,19 +146,19 @@ export default function HuffTab({ stores, populationCells, onHuffResult }: HuffT
 
       {/* Results */}
       {result && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3 sm:p-4">
           <h3 className="text-sm font-bold text-gray-800 mb-3">計算結果</h3>
 
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <div className="bg-blue-50 p-3 rounded-lg">
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 mb-4">
+            <div className="bg-blue-50 p-2 sm:p-3 rounded-lg">
               <div className="text-xs text-gray-500">吸引人口</div>
-              <div className="text-lg font-bold text-blue-700">
+              <div className="text-base sm:text-lg font-bold text-blue-700">
                 {result.totalCaptured.toLocaleString()}人
               </div>
             </div>
-            <div className="bg-blue-50 p-3 rounded-lg">
+            <div className="bg-blue-50 p-2 sm:p-3 rounded-lg">
               <div className="text-xs text-gray-500">平均確率</div>
-              <div className="text-lg font-bold text-blue-700">
+              <div className="text-base sm:text-lg font-bold text-blue-700">
                 {(result.averageProbability * 100).toFixed(1)}%
               </div>
             </div>
@@ -170,7 +170,7 @@ export default function HuffTab({ stores, populationCells, onHuffResult }: HuffT
             {storesWithAttractiveness.map((s) => (
               <div key={s.id} className="flex items-center gap-2">
                 <span
-                  className={`w-2 h-2 rounded-full ${
+                  className={`w-2 h-2 rounded-full shrink-0 ${
                     s.id === targetStoreId
                       ? "bg-blue-600"
                       : s.storeType === "自社"
@@ -178,10 +178,10 @@ export default function HuffTab({ stores, populationCells, onHuffResult }: HuffT
                       : "bg-red-300"
                   }`}
                 ></span>
-                <span className="text-sm flex-1">
+                <span className="text-xs sm:text-sm flex-1 truncate">
                   {s.name} ({s.storeType})
                 </span>
-                <div className="w-32 bg-gray-200 rounded-full h-2">
+                <div className="w-20 sm:w-32 bg-gray-200 rounded-full h-2 shrink-0">
                   <div
                     className={`h-2 rounded-full ${
                       s.id === targetStoreId ? "bg-blue-600" : "bg-gray-400"
@@ -189,7 +189,7 @@ export default function HuffTab({ stores, populationCells, onHuffResult }: HuffT
                     style={{ width: `${s.attractiveness}%` }}
                   ></div>
                 </div>
-                <span className="text-xs text-gray-500 w-8 text-right">{s.attractiveness}</span>
+                <span className="text-xs text-gray-500 w-8 text-right shrink-0">{s.attractiveness}</span>
               </div>
             ))}
           </div>

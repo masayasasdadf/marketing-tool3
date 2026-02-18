@@ -43,6 +43,7 @@ export default function Home() {
   const [radiusKm, setRadiusKm] = useState(3);
   const [competitorQuery, setCompetitorQuery] = useState("買取 リサイクル");
   const [layers, setLayers] = useState<Record<LayerName, boolean>>(DEFAULT_LAYERS);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Data states
   const [populationCells, setPopulationCells] = useState<PopulationCell[]>([]);
@@ -119,6 +120,8 @@ export default function Home() {
     if (!center) return;
 
     setAnalysisLoading(true);
+    // On mobile, close the sidebar when analysis starts
+    setSidebarOpen(false);
 
     try {
       // 1. Fetch population mesh
@@ -229,77 +232,120 @@ export default function Home() {
   return (
     <div className="h-screen flex flex-col">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-4 py-2 flex items-center justify-between">
-        <h1 className="text-lg font-bold text-gray-800">
+      <header className="bg-white border-b border-gray-200 px-3 sm:px-4 py-2 flex items-center justify-between shrink-0">
+        <h1 className="text-base sm:text-lg font-bold text-gray-800 truncate">
           {process.env.NEXT_PUBLIC_APP_NAME || "商圏分析ツール"}
         </h1>
-        <span className="text-xs text-gray-400">買取ラクダ</span>
+        <span className="text-xs text-gray-400 hidden sm:inline">買取ラクダ</span>
       </header>
 
       {/* Tab bar */}
-      <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      <div className="shrink-0">
+        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      </div>
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === "map" && (
-          <div className="flex h-full">
-            {/* Left sidebar */}
-            <div className="flex flex-col h-full">
-              <Sidebar
-                areaName={areaName}
-                setAreaName={setAreaName}
-                center={center}
-                radiusKm={radiusKm}
-                setRadiusKm={setRadiusKm}
-                competitorQuery={competitorQuery}
-                setCompetitorQuery={setCompetitorQuery}
-                layers={layers}
-                toggleLayer={toggleLayer}
-                onAnalyze={runAnalysis}
-                loading={analysisLoading}
-                populationSummary={populationSummary}
-              />
-              <StorePanel
-                stores={stores}
-                onAdd={handleAddStore}
-                onDelete={handleDeleteStore}
-                center={center}
-              />
-            </div>
+          <div className="relative h-full">
+            {/* Mobile toggle button */}
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="lg:hidden absolute top-3 left-3 z-[1000] bg-white rounded-lg shadow-md border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 flex items-center gap-1.5"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={sidebarOpen ? "M6 18L18 6M6 6l12 12" : "M4 6h16M4 12h16M4 18h16"} />
+              </svg>
+              {sidebarOpen ? "閉じる" : "設定"}
+            </button>
 
-            {/* Map area */}
-            <div className="flex-1 relative">
-              <DynamicMap
-                center={center}
-                radiusKm={radiusKm}
-                layers={layers}
-                populationCells={populationCells}
-                competitors={competitors}
-                facilities={facilities}
-                stores={stores}
-                huffResults={huffResults}
-                trafficEstimates={trafficEstimates}
-                aiPoints={aiPoints}
-                onMapClick={handleMapClick}
-              />
-              <AIPanel
-                analysis={aiAnalysis}
-                loading={aiLoading}
-                error={aiError}
-              />
+            <div className="flex h-full">
+              {/* Left sidebar - hidden on mobile by default, shown via toggle */}
+              <div className={`
+                ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
+                lg:translate-x-0 lg:relative
+                absolute inset-y-0 left-0 z-[999]
+                transition-transform duration-200 ease-in-out
+                flex flex-col h-full bg-white shadow-lg lg:shadow-none
+              `}>
+                <Sidebar
+                  areaName={areaName}
+                  setAreaName={setAreaName}
+                  center={center}
+                  radiusKm={radiusKm}
+                  setRadiusKm={setRadiusKm}
+                  competitorQuery={competitorQuery}
+                  setCompetitorQuery={setCompetitorQuery}
+                  layers={layers}
+                  toggleLayer={toggleLayer}
+                  onAnalyze={runAnalysis}
+                  loading={analysisLoading}
+                  populationSummary={populationSummary}
+                />
+                <StorePanel
+                  stores={stores}
+                  onAdd={handleAddStore}
+                  onDelete={handleDeleteStore}
+                  center={center}
+                />
+              </div>
+
+              {/* Backdrop for mobile sidebar */}
+              {sidebarOpen && (
+                <div
+                  className="lg:hidden fixed inset-0 bg-black/30 z-[998]"
+                  onClick={() => setSidebarOpen(false)}
+                />
+              )}
+
+              {/* Map area */}
+              <div className="flex-1 relative">
+                <DynamicMap
+                  center={center}
+                  radiusKm={radiusKm}
+                  layers={layers}
+                  populationCells={populationCells}
+                  competitors={competitors}
+                  facilities={facilities}
+                  stores={stores}
+                  huffResults={huffResults}
+                  trafficEstimates={trafficEstimates}
+                  aiPoints={aiPoints}
+                  onMapClick={handleMapClick}
+                />
+                <AIPanel
+                  analysis={aiAnalysis}
+                  loading={aiLoading}
+                  error={aiError}
+                />
+              </div>
             </div>
           </div>
         )}
 
-        {activeTab === "rankings" && <RankingsTab />}
-        {activeTab === "changes" && <ChangesTab />}
-        {activeTab === "day-night" && <DayNightTab />}
+        {activeTab === "rankings" && (
+          <div className="h-full overflow-y-auto">
+            <RankingsTab />
+          </div>
+        )}
+        {activeTab === "changes" && (
+          <div className="h-full overflow-y-auto">
+            <ChangesTab />
+          </div>
+        )}
+        {activeTab === "day-night" && (
+          <div className="h-full overflow-y-auto">
+            <DayNightTab />
+          </div>
+        )}
         {activeTab === "huff" && (
-          <HuffTab
-            stores={stores}
-            populationCells={populationCells}
-            onHuffResult={handleHuffResult}
-          />
+          <div className="h-full overflow-y-auto">
+            <HuffTab
+              stores={stores}
+              populationCells={populationCells}
+              onHuffResult={handleHuffResult}
+            />
+          </div>
         )}
       </div>
     </div>

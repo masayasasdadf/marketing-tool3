@@ -52,7 +52,7 @@ export default function Sidebar({
   populationSummary,
 }: SidebarProps) {
   return (
-    <div className="w-80 bg-white border-r border-gray-200 flex flex-col h-full sidebar-scroll overflow-y-auto">
+    <div className="w-72 sm:w-80 bg-white border-r border-gray-200 flex flex-col h-full sidebar-scroll overflow-y-auto">
       <div className="p-4 border-b border-gray-200">
         <h2 className="text-lg font-bold text-gray-800 mb-3">分析設定</h2>
 

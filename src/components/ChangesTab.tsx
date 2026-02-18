@@ -41,21 +41,21 @@ export default function ChangesTab() {
   }, []);
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
-      <h2 className="text-xl font-bold text-gray-800 mb-4">人口増減</h2>
+    <div className="p-4 sm:p-6 max-w-5xl mx-auto">
+      <h2 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">人口増減</h2>
 
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3 mb-4">
         <input
           type="text"
           value={prefCode}
           onChange={(e) => setPrefCode(e.target.value)}
           placeholder="都道府県コード（例: 13）"
-          className="px-3 py-2 text-sm border border-gray-300 rounded-md w-48"
+          className="w-full sm:w-48 px-3 py-2 text-sm border border-gray-300 rounded-md"
         />
         <button
           onClick={fetchChanges}
           disabled={loading}
-          className="px-4 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 disabled:bg-gray-300"
+          className="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 disabled:bg-gray-300"
         >
           {loading ? "取得中..." : "取得"}
         </button>
@@ -72,7 +72,7 @@ export default function ChangesTab() {
       )}
 
       {changes.length > 0 ? (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-x-auto">
           <table className="data-table">
             <thead>
               <tr>

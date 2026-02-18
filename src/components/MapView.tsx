@@ -119,7 +119,7 @@ export default function MapView({
     if (!containerRef.current || mapRef.current) return;
 
     const map = L.map(containerRef.current, {
-      center: [35.6812, 139.7671],
+      center: [33.5902, 130.4017],
       zoom: 13,
       zoomControl: true,
     });

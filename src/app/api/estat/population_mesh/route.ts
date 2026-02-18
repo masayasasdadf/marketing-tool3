@@ -15,8 +15,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // e-Stat API: 国勢調査 小地域メッシュ人口
-    // statsDataId: 0003448237 = 国勢調査 500mメッシュ人口
     const latDelta = parsed.radiusKm / 111.32;
     const lngDelta = parsed.radiusKm / (111.32 * Math.cos((parsed.lat * Math.PI) / 180));
 
@@ -25,15 +23,7 @@ export async function POST(req: NextRequest) {
     const minLng = parsed.lng - lngDelta;
     const maxLng = parsed.lng + lngDelta;
 
-    // Use mesh code based approach - get 1km mesh codes in the area
     const cells: PopulationCell[] = [];
-
-    // Try the e-Stat stats API for population mesh data
-    const url = new URL("https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData");
-    url.searchParams.set("appId", appId);
-    url.searchParams.set("statsDataId", "0003448237");
-    url.searchParams.set("sectionHeaderFlg", "2");
-    url.searchParams.set("limit", "1000");
 
     // Generate mesh codes for the area
     const meshCodes = generateMeshCodes(minLat, maxLat, minLng, maxLng);
@@ -45,7 +35,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Fetch in batches by primary mesh
+    // Fetch from e-Stat mesh population API
+    // statsDataId: 0003448237 = 国勢調査 500mメッシュ人口
     const primaryMeshes = [...new Set(meshCodes.map((c) => c.slice(0, 4)))];
 
     for (const primaryMesh of primaryMeshes.slice(0, 5)) {
@@ -68,6 +59,9 @@ export async function POST(req: NextRequest) {
             const meshCode = v["@area"] || v["@cat01"] || "";
             const population = parseInt(v["$"] || "0", 10);
             if (isNaN(population) || population === 0) continue;
+
+            // Sanity check: a single 500m mesh cell should not exceed ~50,000
+            if (population > 50000) continue;
 
             const coords = meshCodeToLatLng(meshCode);
             if (!coords) continue;
@@ -92,11 +86,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // If e-Stat didn't return data, generate approximate data from nearby mesh
+    // If e-Stat didn't return usable data, generate density-based estimates
     if (cells.length === 0) {
-      // Fallback: generate grid cells with population from e-Stat summary API
-      const fallbackCells = await fetchFallbackPopulation(appId, parsed.lat, parsed.lng, parsed.radiusKm);
-      cells.push(...fallbackCells);
+      const estimatedCells = estimatePopulationGrid(
+        parsed.lat,
+        parsed.lng,
+        parsed.radiusKm
+      );
+      cells.push(...estimatedCells);
     }
 
     const populations = cells.map((c) => c.population);
@@ -121,11 +118,6 @@ function generateMeshCodes(
   maxLng: number
 ): string[] {
   const codes: string[] = [];
-  // Generate 1km mesh codes (8-digit JIS mesh)
-  // 1次メッシュ: 緯度を1.5倍の整数部 + 経度-100の整数部
-  // 2次メッシュ: 1次を10x10分割
-  // 3次メッシュ (1km): 2次を10x10分割
-
   for (let lat = minLat; lat <= maxLat; lat += 0.008333) {
     for (let lng = minLng; lng <= maxLng; lng += 0.0125) {
       const code = latLngToMeshCode(lat, lng);
@@ -178,7 +170,6 @@ function meshCodeToLatLng(code: string): { lat: number; lng: number } | null {
       lng += f / 80;
     }
 
-    // Center of mesh cell
     lat += 1 / 240;
     lng += 1 / 160;
 
@@ -188,73 +179,120 @@ function meshCodeToLatLng(code: string): { lat: number; lng: number } | null {
   }
 }
 
-async function fetchFallbackPopulation(
-  appId: string,
+/**
+ * Estimate population grid when e-Stat mesh data is unavailable.
+ *
+ * Uses regional population density heuristics for Japan.
+ * Each 500m mesh cell covers ~0.25 km2.
+ *
+ * NOTE: These are ESTIMATES when real e-Stat data is not available.
+ */
+function estimatePopulationGrid(
   centerLat: number,
   centerLng: number,
   radiusKm: number
-): Promise<PopulationCell[]> {
-  // Generate grid and try to fetch from e-Stat municipality API
+): PopulationCell[] {
   const cells: PopulationCell[] = [];
-  const step = radiusKm > 5 ? 0.01 : 0.005;
+
+  // Determine base density (people/km2) by rough geographic region
+  const baseDensity = estimateRegionalDensity(centerLat, centerLng);
+
+  // 500m mesh cell area = 0.25 km2
+  const cellAreaKm2 = 0.25;
+  const baseCellPop = Math.round(baseDensity * cellAreaKm2);
+
+  // Grid step: ~500m mesh
+  const latStep = 0.004167;
+  const lngStep = 0.00625;
 
   const latDelta = radiusKm / 111.32;
   const lngDelta = radiusKm / (111.32 * Math.cos((centerLat * Math.PI) / 180));
 
-  // Try municipality population from e-Stat
-  try {
-    const url = new URL("https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData");
-    url.searchParams.set("appId", appId);
-    url.searchParams.set("statsDataId", "0000010101");
-    url.searchParams.set("sectionHeaderFlg", "2");
-    url.searchParams.set("limit", "100");
+  // Deterministic pseudo-random based on coordinates
+  let seed = Math.abs(Math.floor(centerLat * 10000 + centerLng * 10000));
 
-    const res = await fetch(url.toString());
-    const data = await res.json();
-    const values = data?.GET_STATS_DATA?.STATISTICAL_DATA?.DATA_INF?.VALUE;
+  for (let lat = centerLat - latDelta; lat <= centerLat + latDelta; lat += latStep) {
+    for (let lng = centerLng - lngDelta; lng <= centerLng + lngDelta; lng += lngStep) {
+      const dist = Math.sqrt(
+        Math.pow((lat - centerLat) * 111.32, 2) +
+          Math.pow((lng - centerLng) * 111.32 * Math.cos((centerLat * Math.PI) / 180), 2)
+      );
+      if (dist > radiusKm) continue;
 
-    let basePop = 5000;
-    if (Array.isArray(values) && values.length > 0) {
-      const pop = parseInt(values[0]["$"] || "5000", 10);
-      if (!isNaN(pop) && pop > 0) basePop = pop;
-    }
+      // Density gradient: higher near center, tapers off
+      const distRatio = dist / radiusKm;
+      const gradientFactor = 1 - distRatio * 0.4;
 
-    // Distribute across grid
-    const gridSize = Math.ceil((radiusKm * 2) / (step * 111));
-    const cellPop = Math.round(basePop / Math.max(gridSize * gridSize, 1));
+      // Pseudo-random jitter (deterministic per cell)
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      const jitter = 0.6 + ((seed % 1000) / 1000) * 0.8;
 
-    for (let lat = centerLat - latDelta; lat <= centerLat + latDelta; lat += step) {
-      for (let lng = centerLng - lngDelta; lng <= centerLng + lngDelta; lng += step) {
-        const dist = Math.sqrt(
-          Math.pow((lat - centerLat) * 111.32, 2) +
-            Math.pow((lng - centerLng) * 111.32 * Math.cos((centerLat * Math.PI) / 180), 2)
-        );
-        if (dist <= radiusKm) {
-          // Density decreases from center
-          const factor = 1 - (dist / radiusKm) * 0.5;
-          const jitter = 0.7 + Math.random() * 0.6;
-          cells.push({
-            lat: Math.round(lat * 100000) / 100000,
-            lng: Math.round(lng * 100000) / 100000,
-            population: Math.max(1, Math.round(cellPop * factor * jitter)),
-            meshCode: latLngToMeshCode(lat, lng) || "",
-          });
-        }
-      }
-    }
-  } catch {
-    // Generate purely estimated grid
-    for (let lat = centerLat - latDelta; lat <= centerLat + latDelta; lat += step) {
-      for (let lng = centerLng - lngDelta; lng <= centerLng + lngDelta; lng += step) {
-        cells.push({
-          lat: Math.round(lat * 100000) / 100000,
-          lng: Math.round(lng * 100000) / 100000,
-          population: Math.round(50 + Math.random() * 200),
-          meshCode: latLngToMeshCode(lat, lng) || "",
-        });
-      }
+      const population = Math.max(1, Math.round(baseCellPop * gradientFactor * jitter));
+
+      cells.push({
+        lat: Math.round(lat * 100000) / 100000,
+        lng: Math.round(lng * 100000) / 100000,
+        population,
+        meshCode: latLngToMeshCode(lat, lng) || "",
+      });
     }
   }
 
   return cells;
+}
+
+/**
+ * Rough density estimate based on geographic region in Japan.
+ * Returns people per km2.
+ */
+function estimateRegionalDensity(lat: number, lng: number): number {
+  // Tokyo 23 wards area
+  if (lat >= 35.55 && lat <= 35.82 && lng >= 139.55 && lng <= 139.92) return 15000;
+  // Greater Tokyo (Saitama, Chiba, Kanagawa suburbs)
+  if (lat >= 35.2 && lat <= 36.1 && lng >= 139.3 && lng <= 140.2) return 4000;
+  // Osaka city core
+  if (lat >= 34.6 && lat <= 34.75 && lng >= 135.4 && lng <= 135.55) return 12000;
+  // Kansai metro
+  if (lat >= 34.5 && lat <= 35.0 && lng >= 135.0 && lng <= 136.0) return 3000;
+  // Nagoya core
+  if (lat >= 35.1 && lat <= 35.25 && lng >= 136.85 && lng <= 137.0) return 7000;
+  // Fukuoka city core
+  if (lat >= 33.55 && lat <= 33.65 && lng >= 130.35 && lng <= 130.45) return 4500;
+  // Fukuoka metro
+  if (lat >= 33.4 && lat <= 33.75 && lng >= 130.2 && lng <= 130.6) return 2000;
+  // Sapporo core
+  if (lat >= 43.0 && lat <= 43.1 && lng >= 141.3 && lng <= 141.4) return 4200;
+  // Sendai core
+  if (lat >= 38.2 && lat <= 38.3 && lng >= 140.85 && lng <= 140.95) return 3500;
+  // Hiroshima core
+  if (lat >= 34.35 && lat <= 34.45 && lng >= 132.4 && lng <= 132.5) return 3800;
+  // Kitakyushu
+  if (lat >= 33.8 && lat <= 33.95 && lng >= 130.8 && lng <= 131.0) return 2500;
+
+  // Check proximity to known cities
+  const knownCities = [
+    { lat: 35.01, lng: 135.77, density: 2500 },
+    { lat: 34.69, lng: 135.20, density: 4000 },
+    { lat: 43.06, lng: 141.35, density: 2500 },
+    { lat: 38.27, lng: 140.87, density: 2000 },
+    { lat: 34.40, lng: 132.46, density: 2000 },
+    { lat: 33.59, lng: 130.40, density: 2500 },
+    { lat: 35.18, lng: 136.91, density: 3000 },
+    { lat: 32.80, lng: 130.71, density: 2000 },
+    { lat: 31.60, lng: 130.56, density: 1800 },
+    { lat: 26.33, lng: 127.80, density: 2500 },
+    { lat: 36.57, lng: 139.88, density: 1500 },
+  ];
+
+  for (const city of knownCities) {
+    const d = Math.sqrt(Math.pow(lat - city.lat, 2) + Math.pow(lng - city.lng, 2));
+    if (d < 0.15) return city.density;
+    if (d < 0.3) return Math.round(city.density * 0.5);
+  }
+
+  // Kyushu rural (e.g., Tagawa area)
+  if (lat >= 33.0 && lat <= 34.0 && lng >= 130.0 && lng <= 131.5) return 350;
+
+  // Default for non-metro Japan
+  return 250;
 }
