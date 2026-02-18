@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
     const maxLng = parsed.lng + lngDelta;
 
     const cells: PopulationCell[] = [];
+    let isEstimate = false;
 
     // Generate mesh codes for the area
     const meshCodes = generateMeshCodes(minLat, maxLat, minLng, maxLng);
@@ -32,11 +33,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         cells: [],
         summary: { total: 0, average: 0, max: 0, cellCount: 0 },
+        isEstimate: true,
       });
     }
 
-    // Fetch from e-Stat mesh population API
-    // statsDataId: 0003448237 = 国勢調査 500mメッシュ人口
+    // Try e-Stat mesh population API
     const primaryMeshes = [...new Set(meshCodes.map((c) => c.slice(0, 4)))];
 
     for (const primaryMesh of primaryMeshes.slice(0, 5)) {
@@ -59,8 +60,6 @@ export async function POST(req: NextRequest) {
             const meshCode = v["@area"] || v["@cat01"] || "";
             const population = parseInt(v["$"] || "0", 10);
             if (isNaN(population) || population === 0) continue;
-
-            // Sanity check: a single 500m mesh cell should not exceed ~50,000
             if (population > 50000) continue;
 
             const coords = meshCodeToLatLng(meshCode);
@@ -82,12 +81,13 @@ export async function POST(req: NextRequest) {
           }
         }
       } catch {
-        // Continue with other mesh codes
+        // Continue
       }
     }
 
-    // If e-Stat didn't return usable data, generate density-based estimates
+    // If e-Stat returned no data, generate per-cell density estimates
     if (cells.length === 0) {
+      isEstimate = true;
       const estimatedCells = estimatePopulationGrid(
         parsed.lat,
         parsed.lng,
@@ -104,6 +104,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       cells,
       summary: { total, average, max, cellCount: cells.length },
+      isEstimate,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
@@ -182,10 +183,11 @@ function meshCodeToLatLng(code: string): { lat: number; lng: number } | null {
 /**
  * Estimate population grid when e-Stat mesh data is unavailable.
  *
- * Uses regional population density heuristics for Japan.
- * Each 500m mesh cell covers ~0.25 km2.
+ * CRITICAL: Density is evaluated PER CELL, not just at the center.
+ * This ensures that a search circle over mountains gets low density
+ * even if it partially overlaps with a city.
  *
- * NOTE: These are ESTIMATES when real e-Stat data is not available.
+ * 500m mesh cell = ~0.25 km2
  */
 function estimatePopulationGrid(
   centerLat: number,
@@ -194,21 +196,13 @@ function estimatePopulationGrid(
 ): PopulationCell[] {
   const cells: PopulationCell[] = [];
 
-  // Determine base density (people/km2) by rough geographic region
-  const baseDensity = estimateRegionalDensity(centerLat, centerLng);
-
-  // 500m mesh cell area = 0.25 km2
+  const latStep = 0.004167; // ~500m
+  const lngStep = 0.00625;  // ~500m
   const cellAreaKm2 = 0.25;
-  const baseCellPop = Math.round(baseDensity * cellAreaKm2);
-
-  // Grid step: ~500m mesh
-  const latStep = 0.004167;
-  const lngStep = 0.00625;
 
   const latDelta = radiusKm / 111.32;
   const lngDelta = radiusKm / (111.32 * Math.cos((centerLat * Math.PI) / 180));
 
-  // Deterministic pseudo-random based on coordinates
   let seed = Math.abs(Math.floor(centerLat * 10000 + centerLng * 10000));
 
   for (let lat = centerLat - latDelta; lat <= centerLat + latDelta; lat += latStep) {
@@ -219,15 +213,25 @@ function estimatePopulationGrid(
       );
       if (dist > radiusKm) continue;
 
-      // Density gradient: higher near center, tapers off
-      const distRatio = dist / radiusKm;
-      const gradientFactor = 1 - distRatio * 0.4;
+      // Evaluate density AT THIS CELL's coordinates, not at center
+      const density = estimateCellDensity(lat, lng);
+      const baseCellPop = Math.round(density * cellAreaKm2);
 
-      // Pseudo-random jitter (deterministic per cell)
+      if (baseCellPop <= 0) {
+        cells.push({
+          lat: Math.round(lat * 100000) / 100000,
+          lng: Math.round(lng * 100000) / 100000,
+          population: 0,
+          meshCode: latLngToMeshCode(lat, lng) || "",
+        });
+        continue;
+      }
+
+      // Small jitter for visual variety
       seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      const jitter = 0.6 + ((seed % 1000) / 1000) * 0.8;
+      const jitter = 0.7 + ((seed % 1000) / 1000) * 0.6; // 0.7-1.3
 
-      const population = Math.max(1, Math.round(baseCellPop * gradientFactor * jitter));
+      const population = Math.max(0, Math.round(baseCellPop * jitter));
 
       cells.push({
         lat: Math.round(lat * 100000) / 100000,
@@ -241,58 +245,111 @@ function estimatePopulationGrid(
   return cells;
 }
 
+// ─── Known city centers with radius and density ───
+// Each entry defines a city core, its approximate urban radius in degrees,
+// and population density at the core. Density falls off with distance.
+interface CityDensityPoint {
+  lat: number;
+  lng: number;
+  coreDensity: number;  // people/km2 at center
+  radiusDeg: number;    // approximate urban extent in degrees (~1 deg ≈ 111km)
+}
+
+const CITY_DENSITY_POINTS: CityDensityPoint[] = [
+  // Tokyo
+  { lat: 35.6812, lng: 139.7671, coreDensity: 15000, radiusDeg: 0.15 },
+  // Tokyo suburbs (multiple points)
+  { lat: 35.73, lng: 139.65, coreDensity: 8000, radiusDeg: 0.08 },
+  { lat: 35.63, lng: 139.65, coreDensity: 8000, radiusDeg: 0.08 },
+  { lat: 35.68, lng: 139.85, coreDensity: 5000, radiusDeg: 0.06 },
+  // Yokohama
+  { lat: 35.4437, lng: 139.6380, coreDensity: 8600, radiusDeg: 0.10 },
+  // Osaka
+  { lat: 34.6937, lng: 135.5023, coreDensity: 12000, radiusDeg: 0.12 },
+  // Nagoya
+  { lat: 35.1815, lng: 136.9066, coreDensity: 7000, radiusDeg: 0.10 },
+  // Sapporo
+  { lat: 43.0621, lng: 141.3544, coreDensity: 4200, radiusDeg: 0.08 },
+  // Fukuoka
+  { lat: 33.5902, lng: 130.4017, coreDensity: 4600, radiusDeg: 0.06 },
+  // Kobe
+  { lat: 34.6901, lng: 135.1956, coreDensity: 4000, radiusDeg: 0.06 },
+  // Kyoto
+  { lat: 35.0116, lng: 135.7681, coreDensity: 3500, radiusDeg: 0.06 },
+  // Kawasaki
+  { lat: 35.5309, lng: 139.7030, coreDensity: 10000, radiusDeg: 0.05 },
+  // Saitama
+  { lat: 35.8617, lng: 139.6455, coreDensity: 6000, radiusDeg: 0.06 },
+  // Hiroshima
+  { lat: 34.3853, lng: 132.4553, coreDensity: 3800, radiusDeg: 0.06 },
+  // Sendai
+  { lat: 38.2682, lng: 140.8694, coreDensity: 3500, radiusDeg: 0.06 },
+  // Kitakyushu
+  { lat: 33.8835, lng: 130.8752, coreDensity: 2500, radiusDeg: 0.06 },
+  // Chiba
+  { lat: 35.6073, lng: 140.1063, coreDensity: 3600, radiusDeg: 0.05 },
+  // Kumamoto
+  { lat: 32.8032, lng: 130.7079, coreDensity: 2000, radiusDeg: 0.05 },
+  // Kagoshima
+  { lat: 31.5966, lng: 130.5571, coreDensity: 1800, radiusDeg: 0.04 },
+  // Naha
+  { lat: 26.3344, lng: 127.8015, coreDensity: 8000, radiusDeg: 0.03 },
+  // Okayama
+  { lat: 34.6551, lng: 133.9195, coreDensity: 2000, radiusDeg: 0.04 },
+  // Niigata
+  { lat: 37.9161, lng: 139.0364, coreDensity: 1800, radiusDeg: 0.04 },
+  // Hamamatsu
+  { lat: 34.7108, lng: 137.7261, coreDensity: 1500, radiusDeg: 0.04 },
+  // Sagamihara
+  { lat: 35.5713, lng: 139.3734, coreDensity: 4000, radiusDeg: 0.04 },
+  // Matsuyama
+  { lat: 33.8392, lng: 132.7657, coreDensity: 1500, radiusDeg: 0.04 },
+  // Kurume
+  { lat: 33.3190, lng: 130.5088, coreDensity: 1200, radiusDeg: 0.03 },
+  // Saga
+  { lat: 33.2494, lng: 130.2988, coreDensity: 1000, radiusDeg: 0.03 },
+  // Sasebo
+  { lat: 33.1593, lng: 129.7228, coreDensity: 800, radiusDeg: 0.03 },
+];
+
 /**
- * Rough density estimate based on geographic region in Japan.
+ * Estimate population density for a SINGLE CELL based on its coordinates.
+ *
+ * Uses a distance-weighted approach from known city centers.
+ * Points far from any city get very low density (rural/mountain).
+ *
  * Returns people per km2.
  */
-function estimateRegionalDensity(lat: number, lng: number): number {
-  // Tokyo 23 wards area
-  if (lat >= 35.55 && lat <= 35.82 && lng >= 139.55 && lng <= 139.92) return 15000;
-  // Greater Tokyo (Saitama, Chiba, Kanagawa suburbs)
-  if (lat >= 35.2 && lat <= 36.1 && lng >= 139.3 && lng <= 140.2) return 4000;
-  // Osaka city core
-  if (lat >= 34.6 && lat <= 34.75 && lng >= 135.4 && lng <= 135.55) return 12000;
-  // Kansai metro
-  if (lat >= 34.5 && lat <= 35.0 && lng >= 135.0 && lng <= 136.0) return 3000;
-  // Nagoya core
-  if (lat >= 35.1 && lat <= 35.25 && lng >= 136.85 && lng <= 137.0) return 7000;
-  // Fukuoka city core
-  if (lat >= 33.55 && lat <= 33.65 && lng >= 130.35 && lng <= 130.45) return 4500;
-  // Fukuoka metro
-  if (lat >= 33.4 && lat <= 33.75 && lng >= 130.2 && lng <= 130.6) return 2000;
-  // Sapporo core
-  if (lat >= 43.0 && lat <= 43.1 && lng >= 141.3 && lng <= 141.4) return 4200;
-  // Sendai core
-  if (lat >= 38.2 && lat <= 38.3 && lng >= 140.85 && lng <= 140.95) return 3500;
-  // Hiroshima core
-  if (lat >= 34.35 && lat <= 34.45 && lng >= 132.4 && lng <= 132.5) return 3800;
-  // Kitakyushu
-  if (lat >= 33.8 && lat <= 33.95 && lng >= 130.8 && lng <= 131.0) return 2500;
+function estimateCellDensity(lat: number, lng: number): number {
+  let maxContribution = 0;
 
-  // Check proximity to known cities
-  const knownCities = [
-    { lat: 35.01, lng: 135.77, density: 2500 },
-    { lat: 34.69, lng: 135.20, density: 4000 },
-    { lat: 43.06, lng: 141.35, density: 2500 },
-    { lat: 38.27, lng: 140.87, density: 2000 },
-    { lat: 34.40, lng: 132.46, density: 2000 },
-    { lat: 33.59, lng: 130.40, density: 2500 },
-    { lat: 35.18, lng: 136.91, density: 3000 },
-    { lat: 32.80, lng: 130.71, density: 2000 },
-    { lat: 31.60, lng: 130.56, density: 1800 },
-    { lat: 26.33, lng: 127.80, density: 2500 },
-    { lat: 36.57, lng: 139.88, density: 1500 },
-  ];
+  for (const city of CITY_DENSITY_POINTS) {
+    const d = Math.sqrt(
+      Math.pow((lat - city.lat) * 111.32, 2) +
+        Math.pow((lng - city.lng) * 111.32 * Math.cos((lat * Math.PI) / 180), 2)
+    );
+    const radiusKm = city.radiusDeg * 111.32;
 
-  for (const city of knownCities) {
-    const d = Math.sqrt(Math.pow(lat - city.lat, 2) + Math.pow(lng - city.lng, 2));
-    if (d < 0.15) return city.density;
-    if (d < 0.3) return Math.round(city.density * 0.5);
+    if (d < radiusKm) {
+      // Inside the urban area - density falls off with distance from center
+      const ratio = d / radiusKm;
+      // Exponential falloff: dense at center, sparse at edges
+      const contribution = city.coreDensity * Math.pow(1 - ratio, 1.5);
+      maxContribution = Math.max(maxContribution, contribution);
+    } else if (d < radiusKm * 2) {
+      // Suburban fringe - much lower density
+      const ratio = (d - radiusKm) / radiusKm;
+      const contribution = city.coreDensity * 0.1 * (1 - ratio);
+      maxContribution = Math.max(maxContribution, contribution);
+    }
   }
 
-  // Kyushu rural (e.g., Tagawa area)
-  if (lat >= 33.0 && lat <= 34.0 && lng >= 130.0 && lng <= 131.5) return 350;
+  if (maxContribution > 0) {
+    return Math.round(maxContribution);
+  }
 
-  // Default for non-metro Japan
-  return 250;
+  // No city influence at all - this is rural/mountain
+  // Japan rural average is ~30-100 people/km2
+  // Mountains/forests are 0-20 people/km2
+  return 20;
 }

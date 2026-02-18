@@ -53,6 +53,7 @@ export default function Home() {
     max: number;
     cellCount: number;
   } | null>(null);
+  const [populationIsEstimate, setPopulationIsEstimate] = useState(false);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
@@ -134,6 +135,7 @@ export default function Home() {
       if (popData.cells) {
         setPopulationCells(popData.cells);
         setPopulationSummary(popData.summary);
+        setPopulationIsEstimate(popData.isEstimate || false);
       }
 
       // 2. Fetch competitors
@@ -281,6 +283,7 @@ export default function Home() {
                   onAnalyze={runAnalysis}
                   loading={analysisLoading}
                   populationSummary={populationSummary}
+                  populationIsEstimate={populationIsEstimate}
                 />
                 <StorePanel
                   stores={stores}

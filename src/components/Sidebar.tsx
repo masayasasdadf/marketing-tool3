@@ -15,6 +15,7 @@ interface SidebarProps {
   onAnalyze: () => void;
   loading: boolean;
   populationSummary: { total: number; average: number; max: number; cellCount: number } | null;
+  populationIsEstimate?: boolean;
 }
 
 const LAYER_NAMES: LayerName[] = [
@@ -50,6 +51,7 @@ export default function Sidebar({
   onAnalyze,
   loading,
   populationSummary,
+  populationIsEstimate,
 }: SidebarProps) {
   return (
     <div className="w-72 sm:w-80 bg-white border-r border-gray-200 flex flex-col h-full sidebar-scroll overflow-y-auto">
@@ -130,7 +132,17 @@ export default function Sidebar({
       {/* Population summary */}
       {populationSummary && (
         <div className="p-4 border-b border-gray-200">
-          <h3 className="text-sm font-semibold text-gray-700 mb-2">人口サマリ</h3>
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">
+            人口サマリ
+            {populationIsEstimate && (
+              <span className="ml-1.5 text-xs font-normal text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">推定値</span>
+            )}
+          </h3>
+          {populationIsEstimate && (
+            <p className="text-xs text-amber-600 mb-2">
+              e-Statメッシュデータ未取得のため推定値です。実際の値とは異なる場合があります。
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-2 text-sm">
             <div className="bg-blue-50 p-2 rounded">
               <div className="text-xs text-gray-500">合計</div>
