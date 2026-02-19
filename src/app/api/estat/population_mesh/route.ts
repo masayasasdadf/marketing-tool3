@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
         // 1km mesh code: 8 digits. Primary mesh: first 4 digits.
         const primaryMeshes = [...new Set(meshCodes3rd.map((c) => c.slice(0, 4)))];
         
-        for (const primaryMesh of primaryMeshes.slice(0, 8)) { // Limit to 8 primary meshes to prevent timeouts
+        for (const primaryMesh of primaryMeshes) {
              const meshUrl = new URL(
               "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
             );
@@ -383,7 +383,7 @@ function estimatePopulationGrid(
       }
 
       seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      const jitter = 0.7 + ((seed % 1000) / 1000) * 0.6; 
+      const jitter = 0.85 + ((seed % 1000) / 1000) * 0.3; // 0.85-1.15
 
       const population = Math.max(0, Math.round(baseCellPop * jitter));
 
@@ -407,44 +407,153 @@ interface CityDensityPoint {
 }
 
 const CITY_DENSITY_POINTS: CityDensityPoint[] = [
-  // Tokyo
-  { lat: 35.6812, lng: 139.7671, coreDensity: 15000, radiusDeg: 0.15 },
-  // ... (Abbreviated for brevity, same list as before) ...
-  // Adding Nogata city for fallback test case
-  { lat: 33.74, lng: 130.72, coreDensity: 2000, radiusDeg: 0.04 },
-  // Fukuoka
-  { lat: 33.5902, lng: 130.4017, coreDensity: 4600, radiusDeg: 0.06 },
-  // Kitakyushu
-  { lat: 33.8835, lng: 130.8752, coreDensity: 2500, radiusDeg: 0.06 },
+  // ── 東京 ──
+  { lat: 35.681, lng: 139.767, coreDensity: 15000, radiusDeg: 0.25 },
+  { lat: 35.710, lng: 139.820, coreDensity: 13000, radiusDeg: 0.12 },
+  { lat: 35.610, lng: 139.720, coreDensity: 12000, radiusDeg: 0.10 },
+  { lat: 35.750, lng: 139.680, coreDensity: 11000, radiusDeg: 0.10 },
+  { lat: 35.670, lng: 139.630, coreDensity: 11000, radiusDeg: 0.10 },
+  { lat: 35.698, lng: 139.414, coreDensity: 4000, radiusDeg: 0.08 },
+  // ── 神奈川 ──
+  { lat: 35.444, lng: 139.638, coreDensity: 12000, radiusDeg: 0.12 },
+  { lat: 35.531, lng: 139.703, coreDensity: 11000, radiusDeg: 0.08 },
+  { lat: 35.571, lng: 139.373, coreDensity: 5500, radiusDeg: 0.06 },
+  // ── 埼玉 ──
+  { lat: 35.862, lng: 139.646, coreDensity: 9000, radiusDeg: 0.10 },
+  { lat: 35.808, lng: 139.724, coreDensity: 10000, radiusDeg: 0.05 },
+  // ── 千葉 ──
+  { lat: 35.607, lng: 140.106, coreDensity: 6500, radiusDeg: 0.08 },
+  { lat: 35.695, lng: 139.983, coreDensity: 9000, radiusDeg: 0.06 },
+  // ── 大阪 ──
+  { lat: 34.694, lng: 135.502, coreDensity: 14000, radiusDeg: 0.15 },
+  { lat: 34.770, lng: 135.470, coreDensity: 8000, radiusDeg: 0.08 },
+  { lat: 34.573, lng: 135.483, coreDensity: 7000, radiusDeg: 0.08 },
+  // ── 愛知 ──
+  { lat: 35.181, lng: 136.907, coreDensity: 11000, radiusDeg: 0.15 },
+  { lat: 34.769, lng: 137.392, coreDensity: 3500, radiusDeg: 0.05 },
+  // ── 北海道 ──
+  { lat: 43.062, lng: 141.354, coreDensity: 10000, radiusDeg: 0.12 },
+  // ── 兵庫 ──
+  { lat: 34.690, lng: 135.196, coreDensity: 9000, radiusDeg: 0.10 },
+  { lat: 34.735, lng: 135.340, coreDensity: 10000, radiusDeg: 0.06 },
+  // ── 京都 ──
+  { lat: 35.012, lng: 135.768, coreDensity: 8000, radiusDeg: 0.10 },
+  // ── 宮城 ──
+  { lat: 38.268, lng: 140.869, coreDensity: 8500, radiusDeg: 0.10 },
+  // ── 広島 ──
+  { lat: 34.385, lng: 132.455, coreDensity: 8500, radiusDeg: 0.10 },
+  // ── 岡山 ──
+  { lat: 34.655, lng: 133.920, coreDensity: 5500, radiusDeg: 0.08 },
+  // ── 新潟 ──
+  { lat: 37.916, lng: 139.036, coreDensity: 4500, radiusDeg: 0.08 },
+  // ── 静岡 ──
+  { lat: 34.976, lng: 138.383, coreDensity: 4500, radiusDeg: 0.06 },
+  { lat: 34.711, lng: 137.726, coreDensity: 4000, radiusDeg: 0.06 },
+  // ── 四国 ──
+  { lat: 33.839, lng: 132.766, coreDensity: 4500, radiusDeg: 0.06 },
+  { lat: 34.340, lng: 134.043, coreDensity: 4000, radiusDeg: 0.05 },
+  // ── 沖縄 ──
+  { lat: 26.334, lng: 127.681, coreDensity: 8500, radiusDeg: 0.04 },
+
+  // ══ 福岡県 全主要市町村 (国勢調査2020ベース) ══
+  // 福岡市 (163万, DID密度~13,000/km²)
+  { lat: 33.590, lng: 130.402, coreDensity: 13000, radiusDeg: 0.15 },
+  { lat: 33.620, lng: 130.450, coreDensity: 6000, radiusDeg: 0.06 },
+  { lat: 33.580, lng: 130.330, coreDensity: 5000, radiusDeg: 0.06 },
+  { lat: 33.560, lng: 130.410, coreDensity: 8000, radiusDeg: 0.05 },
+  // 北九州市 (94万)
+  { lat: 33.884, lng: 130.875, coreDensity: 7500, radiusDeg: 0.10 },
+  { lat: 33.870, lng: 130.760, coreDensity: 5000, radiusDeg: 0.08 },
+  { lat: 33.942, lng: 130.959, coreDensity: 3000, radiusDeg: 0.03 },
+  // 久留米 (30万)
+  { lat: 33.319, lng: 130.509, coreDensity: 5000, radiusDeg: 0.06 },
+  // 飯塚 (12.5万)
+  { lat: 33.646, lng: 130.691, coreDensity: 3000, radiusDeg: 0.04 },
+  // 大牟田 (11万)
+  { lat: 33.030, lng: 130.446, coreDensity: 3500, radiusDeg: 0.04 },
+  // 春日 (11.3万, 14km²)
+  { lat: 33.533, lng: 130.471, coreDensity: 8000, radiusDeg: 0.03 },
+  // 大野城 (10.2万)
+  { lat: 33.537, lng: 130.487, coreDensity: 6500, radiusDeg: 0.03 },
+  // 筑紫野 (10.5万)
+  { lat: 33.496, lng: 130.515, coreDensity: 4000, radiusDeg: 0.04 },
+  // 太宰府 (7.2万)
+  { lat: 33.513, lng: 130.524, coreDensity: 4500, radiusDeg: 0.03 },
+  // 宗像 (9.7万)
+  { lat: 33.806, lng: 130.540, coreDensity: 3000, radiusDeg: 0.03 },
+  // 古賀 (5.9万)
+  { lat: 33.729, lng: 130.471, coreDensity: 3500, radiusDeg: 0.03 },
+  // 福津 (6.7万)
+  { lat: 33.770, lng: 130.490, coreDensity: 3000, radiusDeg: 0.03 },
+  // 糸島 (10万)
+  { lat: 33.557, lng: 130.197, coreDensity: 2500, radiusDeg: 0.03 },
+  // 那珂川 (5万)
+  { lat: 33.500, lng: 130.423, coreDensity: 3500, radiusDeg: 0.02 },
+  // 粕屋 (4.8万)
+  { lat: 33.612, lng: 130.482, coreDensity: 5000, radiusDeg: 0.02 },
+  // 志免 (4.6万)
+  { lat: 33.595, lng: 130.482, coreDensity: 6500, radiusDeg: 0.02 },
+  // 直方 (5.5万)
+  { lat: 33.744, lng: 130.730, coreDensity: 2500, radiusDeg: 0.03 },
+  // 田川 (4.5万)
+  { lat: 33.637, lng: 130.805, coreDensity: 2200, radiusDeg: 0.03 },
+  // 行橋 (7.2万)
+  { lat: 33.727, lng: 131.000, coreDensity: 3000, radiusDeg: 0.03 },
+  // 中間 (3.8万, 16km²)
+  { lat: 33.815, lng: 130.711, coreDensity: 4000, radiusDeg: 0.02 },
+  // 小郡 (5.9万)
+  { lat: 33.396, lng: 130.556, coreDensity: 3500, radiusDeg: 0.03 },
+  // 柳川 (6.3万)
+  { lat: 33.163, lng: 130.407, coreDensity: 2000, radiusDeg: 0.03 },
+  // 朝倉 (4.9万)
+  { lat: 33.421, lng: 130.666, coreDensity: 1500, radiusDeg: 0.03 },
+  // 嘉麻 (3.5万)
+  { lat: 33.567, lng: 130.723, coreDensity: 1200, radiusDeg: 0.03 },
+  // 宮若 (2.6万)
+  { lat: 33.720, lng: 130.665, coreDensity: 1000, radiusDeg: 0.02 },
+  // みやま (3.5万)
+  { lat: 33.154, lng: 130.474, coreDensity: 1200, radiusDeg: 0.02 },
+  // 筑後 (4.8万)
+  { lat: 33.210, lng: 130.502, coreDensity: 1800, radiusDeg: 0.02 },
+
+  // ── その他九州 ──
+  { lat: 33.249, lng: 130.299, coreDensity: 3000, radiusDeg: 0.05 }, // 佐賀
+  { lat: 32.750, lng: 129.878, coreDensity: 5000, radiusDeg: 0.06 }, // 長崎
+  { lat: 33.159, lng: 129.723, coreDensity: 3000, radiusDeg: 0.04 }, // 佐世保
+  { lat: 32.803, lng: 130.708, coreDensity: 7000, radiusDeg: 0.10 }, // 熊本
+  { lat: 33.238, lng: 131.613, coreDensity: 4500, radiusDeg: 0.06 }, // 大分
+  { lat: 31.911, lng: 131.424, coreDensity: 3500, radiusDeg: 0.06 }, // 宮崎
+  { lat: 31.597, lng: 130.557, coreDensity: 5000, radiusDeg: 0.08 }, // 鹿児島
+  { lat: 33.959, lng: 130.942, coreDensity: 3000, radiusDeg: 0.04 }, // 下関
 ];
 
 function estimateCellDensity(lat: number, lng: number): number {
-  let maxContribution = 0;
+  let best = 0;
 
   for (const city of CITY_DENSITY_POINTS) {
-    const d = Math.sqrt(
-      Math.pow((lat - city.lat) * 111.32, 2) +
-        Math.pow(
-          (lng - city.lng) * 111.32 * Math.cos((lat * Math.PI) / 180),
-          2
-        )
-    );
-    const radiusKm = city.radiusDeg * 111.32;
+    const dLat = (lat - city.lat) * 111.32;
+    const dLng = (lng - city.lng) * 111.32 * Math.cos((lat * Math.PI) / 180);
+    const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+    const rKm = city.radiusDeg * 111.32;
 
-    if (d < radiusKm) {
-      const ratio = d / radiusKm;
-      const contribution = city.coreDensity * Math.pow(1 - ratio, 1.5);
-      maxContribution = Math.max(maxContribution, contribution);
-    } else if (d < radiusKm * 2) {
-      const ratio = (d - radiusKm) / radiusKm;
-      const contribution = city.coreDensity * 0.1 * (1 - ratio);
-      maxContribution = Math.max(maxContribution, contribution);
+    if (dist < rKm) {
+      const v = city.coreDensity * Math.pow(1 - dist / rKm, 1.5);
+      if (v > best) best = v;
+    } else if (dist < rKm * 2.5) {
+      const v = city.coreDensity * 0.15 * Math.pow(1 - (dist - rKm) / (rKm * 1.5), 2);
+      if (v > best) best = v;
     }
   }
 
-  if (maxContribution > 0) {
-    return Math.round(maxContribution);
-  }
+  if (best > 0) return Math.round(best);
 
-  return 20; 
+  // Regional rural baseline
+  if (lat > 41) return 15;                                           // 北海道
+  if (lat > 37) return 60;                                           // 東北
+  if (lat > 35 && lng > 138.5 && lng < 141) return 200;              // 関東平野
+  if (lat > 34 && lat < 35.5 && lng > 134 && lng < 136.5) return 150; // 近畿
+  if (lat > 33.3 && lat < 34 && lng > 130 && lng < 131.5) return 150; // 北部九州
+  if (lat > 31 && lat < 33.5 && lng > 129.5 && lng < 132) return 80;  // 南九州
+  if (lat > 24 && lat < 27) return 100;                               // 沖縄
+  return 60;
 }
