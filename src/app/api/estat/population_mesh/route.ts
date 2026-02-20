@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { PopulationMeshRequestSchema } from "@/types";
 import type { PopulationCell } from "@/types";
 
-// Maximum number of cells to return to avoid overwhelming the frontend
 const MAX_CELLS = 2000;
 
 export async function POST(req: NextRequest) {
@@ -27,8 +26,6 @@ export async function POST(req: NextRequest) {
     const minLng = parsed.lng - lngDelta;
     const maxLng = parsed.lng + lngDelta;
 
-    // Generate mesh codes for the area
-    // Step 1: Generate 1km (3rd level) mesh codes as base
     const meshCodes3rd = generateMeshCodes(minLat, maxLat, minLng, maxLng);
 
     if (meshCodes3rd.length === 0) {
@@ -40,145 +37,188 @@ export async function POST(req: NextRequest) {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Strategy: Dynamic Lookup for Best Available Data
-    // 1. Search for available mesh statistics (500m or 1km)
-    // 2. Fetch data using the best available table ID
+    // Strategy:
+    // 1. Dynamic lookup for best mesh stats table ID
+    // 2. Fetch real census data per primary mesh
+    // 3. Fallback to estimation ONLY if API returns nothing
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    let cells: PopulationCell[] = [];
+
+    const cellMap = new Map<string, PopulationCell>();
     let isEstimate = false;
     let usedStatsId = "";
+    let debugInfo: Record<string, unknown> = {};
 
-    // Step 1: Find best statsDataId
+    // Step 1: Find best statsDataId via getStatsList
+    let targetTableId = "";
     try {
       const statsListUrl = new URL(
         "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsList"
       );
       statsListUrl.searchParams.set("appId", appId);
-      statsListUrl.searchParams.set("statsCode", "00200521"); // Population Census
-      statsListUrl.searchParams.set("searchKind", "2");      // Mesh statistics
-      statsListUrl.searchParams.set("surveyYears", "2020");  // Latest full census
-      // Limit search to reduce response size
-      statsListUrl.searchParams.set("limit", "20"); 
+      statsListUrl.searchParams.set("statsCode", "00200521");
+      statsListUrl.searchParams.set("searchKind", "2");
+      statsListUrl.searchParams.set("surveyYears", "2020");
+      statsListUrl.searchParams.set("limit", "50");
 
       const listRes = await fetch(statsListUrl.toString());
       const listData = await listRes.json();
-      
-      const tables = listData?.GET_STATS_LIST?.DATALIST_INF?.TABLE_INF;
-      let targetTableId = "";
-      
-      if (Array.isArray(tables)) {
-        // Preference: 1. 500m mesh (4次メッシュ) Population, 2. 1km mesh (3次メッシュ) Population
-        
-        // Find 500m mesh table
-        const mesh4Table = tables.find(t => 
-          (t.TITLE && (t.TITLE.includes("4次メッシュ") || t.TITLE.includes("500m"))) &&
-          (t.TITLE.includes("人口") || t.TITLE.includes("世帯")) &&
-          !t.TITLE.includes("移動") // Exclude migration data
+
+      // TABLE_INF can be a single object or an array
+      const rawTables =
+        listData?.GET_STATS_LIST?.DATALIST_INF?.TABLE_INF;
+      const tables: Record<string, unknown>[] = Array.isArray(rawTables)
+        ? rawTables
+        : rawTables
+          ? [rawTables]
+          : [];
+
+      debugInfo.tablesFound = tables.length;
+      debugInfo.tableTitles = tables.slice(0, 5).map((t) => getTitle(t));
+
+      // Preference: 500m mesh > 1km mesh > any mesh with population
+      const mesh4Table = tables.find((t) => {
+        const title = getTitle(t);
+        return (
+          (title.includes("4次メッシュ") ||
+            title.includes("500m") ||
+            title.includes("2分の1")) &&
+          (title.includes("人口") || title.includes("基本")) &&
+          !title.includes("移動")
         );
-        
-        // Find 1km mesh table
-        const mesh3Table = tables.find(t => 
-          (t.TITLE && (t.TITLE.includes("3次メッシュ") || t.TITLE.includes("1km"))) &&
-          (t.TITLE.includes("人口") || t.TITLE.includes("世帯"))
+      });
+
+      const mesh3Table = tables.find((t) => {
+        const title = getTitle(t);
+        return (
+          (title.includes("3次メッシュ") || title.includes("1km")) &&
+          (title.includes("人口") || title.includes("基本"))
         );
+      });
 
-        if (mesh4Table) {
-          targetTableId = mesh4Table["@id"];
-        } else if (mesh3Table) {
-          targetTableId = mesh3Table["@id"];
-        }
+      const anyMeshPopTable = tables.find((t) => {
+        const title = getTitle(t);
+        return (
+          title.includes("メッシュ") &&
+          (title.includes("人口") || title.includes("基本"))
+        );
+      });
+
+      if (mesh4Table) {
+        targetTableId = String(mesh4Table["@id"] || "");
+      } else if (mesh3Table) {
+        targetTableId = String(mesh3Table["@id"] || "");
+      } else if (anyMeshPopTable) {
+        targetTableId = String(anyMeshPopTable["@id"] || "");
       }
 
-      // If dynamic lookup fails, fallback to known good IDs
-      if (!targetTableId) {
-        targetTableId = "T001100"; // 2020 4th mesh (known ID)
-      }
-      
-      // Step 2: Fetch data using the identified ID
-      if (targetTableId) {
-        // Fetch for each primary mesh code (first 4 digits of 3rd level mesh)
-        // 1km mesh code: 8 digits. Primary mesh: first 4 digits.
-        const primaryMeshes = [...new Set(meshCodes3rd.map((c) => c.slice(0, 4)))];
-        
-        for (const primaryMesh of primaryMeshes) {
-             const meshUrl = new URL(
-              "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
-            );
-            meshUrl.searchParams.set("appId", appId);
-            meshUrl.searchParams.set("statsDataId", targetTableId);
-            meshUrl.searchParams.set("cdMesh", primaryMesh);
-            meshUrl.searchParams.set("limit", "10000");
-
-            try {
-              const res = await fetch(meshUrl.toString());
-              const data = await res.json();
-              
-              const values = data?.GET_STATS_DATA?.STATISTICAL_DATA?.DATA_INF?.VALUE;
-              
-              if (Array.isArray(values)) {
-                
-                // Identify total population category
-                const totalPopCat = findTotalPopulationCategory(values);
-                
-                for (const v of values) {
-                  const meshCode = v["@area"] || ""; // Mesh code
-                  const catCode = v["@cat01"] || ""; // Category code
-                  
-                  // Filter for total population only
-                  if (totalPopCat && catCode !== totalPopCat) continue;
-                  
-                  const population = parseInt(v["$"] || "0", 10);
-                  if (isNaN(population) || population <= 0) continue;
-                  
-                  const coords = meshCodeToLatLng(meshCode);
-                  if (!coords) continue;
-                  
-                   if (
-                      coords.lat >= minLat &&
-                      coords.lat <= maxLat &&
-                      coords.lng >= minLng &&
-                      coords.lng <= maxLng
-                    ) {
-                      cells.push({
-                        lat: coords.lat,
-                        lng: coords.lng,
-                        population,
-                        meshCode,
-                      });
-                    }
-                }
-              }
-              
-              if (cells.length > 0) {
-                 usedStatsId = targetTableId;
-              }
-              
-            } catch (e) {
-               console.error(`Failed to fetch/parse mesh data for ${primaryMesh}:`, e);
-            }
-        }
-      }
-
+      debugInfo.selectedTableId = targetTableId || "(none from dynamic)";
     } catch (e) {
       console.error("Failed to query stats list:", e);
+      debugInfo.statsListError = String(e);
     }
 
+    // Step 2: If dynamic lookup failed, try known statsDataIds for 2020 Census mesh
+    const fallbackIds = [
+      "0003448237", // 令和2年国勢調査 4次メッシュ(500m)
+      "0003448233", // 令和2年国勢調査 3次メッシュ(1km)
+      "0003448234", // 令和2年国勢調査 3次メッシュ 別パターン
+      "0003448238", // 令和2年国勢調査 4次メッシュ 別パターン
+    ];
 
-    // If e-Stat returned no data, generate per-cell density estimates
+    const idsToTry = targetTableId
+      ? [targetTableId, ...fallbackIds]
+      : fallbackIds;
+
+    // Step 3: Fetch mesh data - try each ID until one works
+    const primaryMeshes = [
+      ...new Set(meshCodes3rd.map((c) => c.slice(0, 4))),
+    ];
+
+    debugInfo.primaryMeshCount = primaryMeshes.length;
+    debugInfo.primaryMeshCodes = primaryMeshes;
+
+    for (const statsId of idsToTry) {
+      // Try first primary mesh to see if this ID works
+      const testMesh = primaryMeshes[0];
+      const testUrl = new URL(
+        "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
+      );
+      testUrl.searchParams.set("appId", appId);
+      testUrl.searchParams.set("statsDataId", statsId);
+      testUrl.searchParams.set("cdMesh", testMesh);
+      testUrl.searchParams.set("limit", "10000");
+
+      try {
+        const testRes = await fetch(testUrl.toString());
+        const testData = await testRes.json();
+
+        const testValues =
+          testData?.GET_STATS_DATA?.STATISTICAL_DATA?.DATA_INF?.VALUE;
+        const errInfo =
+          testData?.GET_STATS_DATA?.RESULT;
+
+        if (!Array.isArray(testValues) || testValues.length === 0) {
+          debugInfo[`id_${statsId}`] = {
+            status: "no_data",
+            error: errInfo?.ERROR_MSG || "empty",
+          };
+          continue;
+        }
+
+        // This ID works! Fetch all primary meshes with it
+        usedStatsId = statsId;
+        debugInfo.workingStatsId = statsId;
+
+        // Process the test result first
+        processValues(testValues, cellMap, minLat, maxLat, minLng, maxLng);
+
+        // Fetch remaining primary meshes in parallel (batches of 5)
+        const remaining = primaryMeshes.slice(1);
+        for (let i = 0; i < remaining.length; i += 5) {
+          const batch = remaining.slice(i, i + 5);
+          const results = await Promise.allSettled(
+            batch.map(async (pm) => {
+              const url = new URL(
+                "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
+              );
+              url.searchParams.set("appId", appId);
+              url.searchParams.set("statsDataId", statsId);
+              url.searchParams.set("cdMesh", pm);
+              url.searchParams.set("limit", "10000");
+              const res = await fetch(url.toString());
+              return res.json();
+            })
+          );
+
+          for (const r of results) {
+            if (r.status === "fulfilled") {
+              const vals =
+                r.value?.GET_STATS_DATA?.STATISTICAL_DATA?.DATA_INF?.VALUE;
+              if (Array.isArray(vals)) {
+                processValues(vals, cellMap, minLat, maxLat, minLng, maxLng);
+              }
+            }
+          }
+        }
+
+        break; // Found working ID, done
+      } catch (e) {
+        debugInfo[`id_${statsId}`] = { status: "error", msg: String(e) };
+      }
+    }
+
+    let cells = Array.from(cellMap.values());
+    debugInfo.apiCellCount = cells.length;
+
+    // If e-Stat returned no data, use estimation fallback
     if (cells.length === 0) {
       isEstimate = true;
-      const estimatedCells = estimatePopulationGrid(
+      cells = estimatePopulationGrid(
         parsed.lat,
         parsed.lng,
         parsed.radiusKm
       );
-      cells.push(...estimatedCells);
     }
-    
-    // Limit cells and deduplicate if needed (though map grouping above prevents dupes for same mesh+cat)
-    // If we have mixed 500m and 1km data (unlikely with one statsId), preference would be needed.
-    // For now, simple return.
 
     const populations = cells.map((c) => c.population);
     const total = populations.reduce((a, b) => a + b, 0);
@@ -189,12 +229,71 @@ export async function POST(req: NextRequest) {
       cells: cells.slice(0, MAX_CELLS),
       summary: { total, average, max, cellCount: cells.length },
       isEstimate,
-      // Debug info to help verify
-      debug: { usedStatsId, isFallback: isEstimate }
+      debug: { usedStatsId, isFallback: isEstimate, ...debugInfo },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 400 });
+  }
+}
+
+/**
+ * Extract title string from e-Stat TABLE_INF.
+ * TITLE can be a plain string OR an object like {"$": "title", "@no": "1"}.
+ */
+function getTitle(table: Record<string, unknown>): string {
+  const t = table?.TITLE;
+  if (!t) return "";
+  if (typeof t === "string") return t;
+  if (typeof t === "object" && t !== null) {
+    const obj = t as Record<string, unknown>;
+    return String(obj["$"] || obj["#text"] || "");
+  }
+  return String(t);
+}
+
+/**
+ * Process e-Stat VALUE array into cellMap, deduplicating by meshCode (keep max).
+ */
+function processValues(
+  values: Record<string, string>[],
+  cellMap: Map<string, PopulationCell>,
+  minLat: number,
+  maxLat: number,
+  minLng: number,
+  maxLng: number
+): void {
+  const totalPopCat = findTotalPopulationCategory(values);
+
+  for (const v of values) {
+    const meshCode = v["@area"] || "";
+    const catCode = v["@cat01"] || "";
+
+    if (totalPopCat && catCode !== totalPopCat) continue;
+
+    const population = parseInt(v["$"] || "0", 10);
+    if (isNaN(population) || population <= 0) continue;
+
+    const coords = meshCodeToLatLng(meshCode);
+    if (!coords) continue;
+
+    if (
+      coords.lat >= minLat &&
+      coords.lat <= maxLat &&
+      coords.lng >= minLng &&
+      coords.lng <= maxLng
+    ) {
+      // Deduplicate: keep highest population for same mesh code
+      const existing = cellMap.get(meshCode);
+      if (!existing || population > existing.population) {
+        cellMap.set(meshCode, {
+          lat: coords.lat,
+          lng: coords.lng,
+          population,
+          meshCode,
+        });
+      }
+    }
   }
 }
 
@@ -216,22 +315,23 @@ function findTotalPopulationCategory(
     }
   }
 
-  if (catCodes.size === 1) return [...catCodes][0];
+  if (catCodes.size <= 1) return catCodes.size === 1 ? [...catCodes][0] : null;
 
+  // Look for total population by name
   for (const [code, name] of catNames) {
     if (
-      name.includes("総数") ||
       name.includes("人口総数") ||
-      name.includes("total")
+      name.includes("総数") ||
+      name === "人口" ||
+      name.toLowerCase().includes("total")
     ) {
       return code;
     }
   }
 
+  // Smallest code is typically the "total" row
   const sorted = [...catCodes].sort();
-  if (sorted.length > 0) return sorted[0];
-
-  return null;
+  return sorted[0] || null;
 }
 
 function generateMeshCodes(
@@ -241,9 +341,6 @@ function generateMeshCodes(
   maxLng: number
 ): string[] {
   const codes: string[] = [];
-  // Step by 3rd-level mesh (approximately 1km)
-  // Lat step: 30 sec = 0.008333 deg
-  // Lng step: 45 sec = 0.0125 deg
   for (let lat = minLat; lat <= maxLat; lat += 0.008333) {
     for (let lng = minLng; lng <= maxLng; lng += 0.0125) {
       const code = latLngToMeshCode(lat, lng);
@@ -257,24 +354,18 @@ function generateMeshCodes(
 
 function latLngToMeshCode(lat: number, lng: number): string | null {
   try {
-    // 1st Mesh
     const p = lat * 1.5;
     const a = Math.floor(p);
     const q = lng - 100;
     const b = Math.floor(q);
-
-    // 2nd Mesh
     const pr = (p - a) * 8;
     const c = Math.floor(pr);
     const qr = (q - b) * 8;
     const d = Math.floor(qr);
-
-    // 3rd Mesh
     const pr2 = (pr - c) * 10;
     const e = Math.floor(pr2);
     const qr2 = (qr - d) * 10;
     const f = Math.floor(qr2);
-
     return `${a}${b}${c}${d}${e}${f}`;
   } catch {
     return null;
@@ -299,7 +390,6 @@ function meshCodeToLatLng(code: string): { lat: number; lng: number } | null {
       lng += f / 80;
     }
 
-    // Center offset
     if (code.length <= 6) {
       lat += 1 / 24;
       lng += 1 / 16;
@@ -307,12 +397,14 @@ function meshCodeToLatLng(code: string): { lat: number; lng: number } | null {
       lat += 1 / 240;
       lng += 1 / 160;
     } else {
-      // 4th Mesh (500m) or finer
       if (code.length >= 9) {
         const subdivision = parseInt(code.slice(8, 9), 10);
         if (subdivision === 2) lng += 1 / 160;
         else if (subdivision === 3) lat += 1 / 240;
-        else if (subdivision === 4) { lat += 1 / 240; lng += 1 / 160; }
+        else if (subdivision === 4) {
+          lat += 1 / 240;
+          lng += 1 / 160;
+        }
       }
       lat += 1 / 480;
       lng += 1 / 320;
@@ -324,28 +416,25 @@ function meshCodeToLatLng(code: string): { lat: number; lng: number } | null {
   }
 }
 
-/**
- * Estimate population grid when e-Stat mesh data is unavailable.
- * Improved fallback with clearer visual indication of density.
- */
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Fallback estimation (used ONLY when e-Stat API fails)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 function estimatePopulationGrid(
   centerLat: number,
   centerLng: number,
   radiusKm: number
 ): PopulationCell[] {
   const cells: PopulationCell[] = [];
-
-  const latStep = 0.004167; // ~500m
-  const lngStep = 0.00625; // ~500m
+  const latStep = 0.004167;
+  const lngStep = 0.00625;
   const cellAreaKm2 = 0.25;
 
   const latDelta = radiusKm / 111.32;
   const lngDelta =
     radiusKm / (111.32 * Math.cos((centerLat * Math.PI) / 180));
 
-  let seed = Math.abs(
-    Math.floor(centerLat * 10000 + centerLng * 10000)
-  );
+  let seed = Math.abs(Math.floor(centerLat * 10000 + centerLng * 10000));
 
   for (
     let lat = centerLat - latDelta;
@@ -371,7 +460,6 @@ function estimatePopulationGrid(
       const density = estimateCellDensity(lat, lng);
       const baseCellPop = Math.round(density * cellAreaKm2);
 
-      // Always include cell if near center, even if 0, to show grid
       if (baseCellPop <= 0) {
         cells.push({
           lat: Math.round(lat * 100000) / 100000,
@@ -383,14 +471,12 @@ function estimatePopulationGrid(
       }
 
       seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      const jitter = 0.85 + ((seed % 1000) / 1000) * 0.3; // 0.85-1.15
-
-      const population = Math.max(0, Math.round(baseCellPop * jitter));
+      const jitter = 0.9 + ((seed % 1000) / 1000) * 0.2; // 0.9-1.1
 
       cells.push({
         lat: Math.round(lat * 100000) / 100000,
         lng: Math.round(lng * 100000) / 100000,
-        population,
+        population: Math.max(0, Math.round(baseCellPop * jitter)),
         meshCode: latLngToMeshCode(lat, lng) || "",
       });
     }
@@ -402,8 +488,8 @@ function estimatePopulationGrid(
 interface CityDensityPoint {
   lat: number;
   lng: number;
-  coreDensity: number; 
-  radiusDeg: number; 
+  coreDensity: number;
+  radiusDeg: number;
 }
 
 const CITY_DENSITY_POINTS: CityDensityPoint[] = [
@@ -455,76 +541,49 @@ const CITY_DENSITY_POINTS: CityDensityPoint[] = [
   // ── 沖縄 ──
   { lat: 26.334, lng: 127.681, coreDensity: 8500, radiusDeg: 0.04 },
 
-  // ══ 福岡県 全主要市町村 (国勢調査2020ベース) ══
-  // 福岡市 (163万, DID密度~13,000/km²)
+  // ══ 福岡県 ══
   { lat: 33.590, lng: 130.402, coreDensity: 13000, radiusDeg: 0.15 },
   { lat: 33.620, lng: 130.450, coreDensity: 6000, radiusDeg: 0.06 },
   { lat: 33.580, lng: 130.330, coreDensity: 5000, radiusDeg: 0.06 },
   { lat: 33.560, lng: 130.410, coreDensity: 8000, radiusDeg: 0.05 },
-  // 北九州市 (94万)
   { lat: 33.884, lng: 130.875, coreDensity: 7500, radiusDeg: 0.10 },
   { lat: 33.870, lng: 130.760, coreDensity: 5000, radiusDeg: 0.08 },
   { lat: 33.942, lng: 130.959, coreDensity: 3000, radiusDeg: 0.03 },
-  // 久留米 (30万)
   { lat: 33.319, lng: 130.509, coreDensity: 5000, radiusDeg: 0.06 },
-  // 飯塚 (12.5万)
   { lat: 33.646, lng: 130.691, coreDensity: 3000, radiusDeg: 0.04 },
-  // 大牟田 (11万)
   { lat: 33.030, lng: 130.446, coreDensity: 3500, radiusDeg: 0.04 },
-  // 春日 (11.3万, 14km²)
   { lat: 33.533, lng: 130.471, coreDensity: 8000, radiusDeg: 0.03 },
-  // 大野城 (10.2万)
   { lat: 33.537, lng: 130.487, coreDensity: 6500, radiusDeg: 0.03 },
-  // 筑紫野 (10.5万)
   { lat: 33.496, lng: 130.515, coreDensity: 4000, radiusDeg: 0.04 },
-  // 太宰府 (7.2万)
   { lat: 33.513, lng: 130.524, coreDensity: 4500, radiusDeg: 0.03 },
-  // 宗像 (9.7万)
   { lat: 33.806, lng: 130.540, coreDensity: 3000, radiusDeg: 0.03 },
-  // 古賀 (5.9万)
   { lat: 33.729, lng: 130.471, coreDensity: 3500, radiusDeg: 0.03 },
-  // 福津 (6.7万)
   { lat: 33.770, lng: 130.490, coreDensity: 3000, radiusDeg: 0.03 },
-  // 糸島 (10万)
   { lat: 33.557, lng: 130.197, coreDensity: 2500, radiusDeg: 0.03 },
-  // 那珂川 (5万)
   { lat: 33.500, lng: 130.423, coreDensity: 3500, radiusDeg: 0.02 },
-  // 粕屋 (4.8万)
   { lat: 33.612, lng: 130.482, coreDensity: 5000, radiusDeg: 0.02 },
-  // 志免 (4.6万)
   { lat: 33.595, lng: 130.482, coreDensity: 6500, radiusDeg: 0.02 },
-  // 直方 (5.5万)
   { lat: 33.744, lng: 130.730, coreDensity: 2500, radiusDeg: 0.03 },
-  // 田川 (4.5万)
   { lat: 33.637, lng: 130.805, coreDensity: 2200, radiusDeg: 0.03 },
-  // 行橋 (7.2万)
   { lat: 33.727, lng: 131.000, coreDensity: 3000, radiusDeg: 0.03 },
-  // 中間 (3.8万, 16km²)
   { lat: 33.815, lng: 130.711, coreDensity: 4000, radiusDeg: 0.02 },
-  // 小郡 (5.9万)
   { lat: 33.396, lng: 130.556, coreDensity: 3500, radiusDeg: 0.03 },
-  // 柳川 (6.3万)
   { lat: 33.163, lng: 130.407, coreDensity: 2000, radiusDeg: 0.03 },
-  // 朝倉 (4.9万)
   { lat: 33.421, lng: 130.666, coreDensity: 1500, radiusDeg: 0.03 },
-  // 嘉麻 (3.5万)
   { lat: 33.567, lng: 130.723, coreDensity: 1200, radiusDeg: 0.03 },
-  // 宮若 (2.6万)
   { lat: 33.720, lng: 130.665, coreDensity: 1000, radiusDeg: 0.02 },
-  // みやま (3.5万)
   { lat: 33.154, lng: 130.474, coreDensity: 1200, radiusDeg: 0.02 },
-  // 筑後 (4.8万)
   { lat: 33.210, lng: 130.502, coreDensity: 1800, radiusDeg: 0.02 },
 
   // ── その他九州 ──
-  { lat: 33.249, lng: 130.299, coreDensity: 3000, radiusDeg: 0.05 }, // 佐賀
-  { lat: 32.750, lng: 129.878, coreDensity: 5000, radiusDeg: 0.06 }, // 長崎
-  { lat: 33.159, lng: 129.723, coreDensity: 3000, radiusDeg: 0.04 }, // 佐世保
-  { lat: 32.803, lng: 130.708, coreDensity: 7000, radiusDeg: 0.10 }, // 熊本
-  { lat: 33.238, lng: 131.613, coreDensity: 4500, radiusDeg: 0.06 }, // 大分
-  { lat: 31.911, lng: 131.424, coreDensity: 3500, radiusDeg: 0.06 }, // 宮崎
-  { lat: 31.597, lng: 130.557, coreDensity: 5000, radiusDeg: 0.08 }, // 鹿児島
-  { lat: 33.959, lng: 130.942, coreDensity: 3000, radiusDeg: 0.04 }, // 下関
+  { lat: 33.249, lng: 130.299, coreDensity: 3000, radiusDeg: 0.05 },
+  { lat: 32.750, lng: 129.878, coreDensity: 5000, radiusDeg: 0.06 },
+  { lat: 33.159, lng: 129.723, coreDensity: 3000, radiusDeg: 0.04 },
+  { lat: 32.803, lng: 130.708, coreDensity: 7000, radiusDeg: 0.10 },
+  { lat: 33.238, lng: 131.613, coreDensity: 4500, radiusDeg: 0.06 },
+  { lat: 31.911, lng: 131.424, coreDensity: 3500, radiusDeg: 0.06 },
+  { lat: 31.597, lng: 130.557, coreDensity: 5000, radiusDeg: 0.08 },
+  { lat: 33.959, lng: 130.942, coreDensity: 3000, radiusDeg: 0.04 },
 ];
 
 function estimateCellDensity(lat: number, lng: number): number {
@@ -532,28 +591,28 @@ function estimateCellDensity(lat: number, lng: number): number {
 
   for (const city of CITY_DENSITY_POINTS) {
     const dLat = (lat - city.lat) * 111.32;
-    const dLng = (lng - city.lng) * 111.32 * Math.cos((lat * Math.PI) / 180);
+    const dLng =
+      (lng - city.lng) * 111.32 * Math.cos((lat * Math.PI) / 180);
     const dist = Math.sqrt(dLat * dLat + dLng * dLng);
     const rKm = city.radiusDeg * 111.32;
 
     if (dist < rKm) {
       const v = city.coreDensity * Math.pow(1 - dist / rKm, 1.5);
       if (v > best) best = v;
-    } else if (dist < rKm * 2.5) {
-      const v = city.coreDensity * 0.15 * Math.pow(1 - (dist - rKm) / (rKm * 1.5), 2);
+    } else if (dist < rKm * 2.0) {
+      // Suburban fringe - small contribution, drops off quickly
+      const v =
+        city.coreDensity *
+        0.08 *
+        Math.pow(1 - (dist - rKm) / rKm, 2);
       if (v > best) best = v;
     }
   }
 
   if (best > 0) return Math.round(best);
 
-  // Regional rural baseline
-  if (lat > 41) return 15;                                           // 北海道
-  if (lat > 37) return 60;                                           // 東北
-  if (lat > 35 && lng > 138.5 && lng < 141) return 200;              // 関東平野
-  if (lat > 34 && lat < 35.5 && lng > 134 && lng < 136.5) return 150; // 近畿
-  if (lat > 33.3 && lat < 34 && lng > 130 && lng < 131.5) return 150; // 北部九州
-  if (lat > 31 && lat < 33.5 && lng > 129.5 && lng < 132) return 80;  // 南九州
-  if (lat > 24 && lat < 27) return 100;                               // 沖縄
-  return 60;
+  // No city influence = truly rural/mountainous
+  // Keep very low - it's better to underestimate than overestimate
+  // The real data from e-Stat should be used for accuracy
+  return 5;
 }
