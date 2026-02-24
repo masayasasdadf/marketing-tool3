@@ -39,18 +39,28 @@ export async function fetchSheetData(gid: number = 0): Promise<SheetRow[]> {
     return [];
   }
 
-  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`;
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&gid=${gid}`;
 
   try {
     const res = await fetch(url);
-    if (!res.ok) return [];
+    if (!res.ok) {
+      console.error(`[sheets-reader] Failed to fetch gid=${gid}: ${res.status} ${res.statusText}`);
+      return [];
+    }
 
     const text = await res.text();
+    if (!text || text.startsWith("<!")) {
+      // HTMLが返ってきた場合（権限エラー等）
+      console.error(`[sheets-reader] Got HTML instead of CSV for gid=${gid}. スプレッドシートの共有設定を確認してください。`);
+      return [];
+    }
     const rows = parseCSV(text);
+    console.log(`[sheets-reader] gid=${gid}: ${rows.length} rows loaded`);
 
     cache.set(cacheKey, { data: rows, fetchedAt: Date.now() });
     return rows;
-  } catch {
+  } catch (err) {
+    console.error(`[sheets-reader] Error fetching gid=${gid}:`, err);
     return [];
   }
 }

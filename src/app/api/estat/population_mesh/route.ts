@@ -41,11 +41,14 @@ export async function POST(req: NextRequest) {
       const name = await resolveAreaName(gsiResult.muniCd);
       // ─── Step 2: スプレッドシートから人口データ取得 ───
       const sheetPop = await lookupByMuniCode(gsiResult.muniCd, "0000A", 0);
+      console.log(`[population_mesh] GSI: muniCd=${gsiResult.muniCd}, name=${name}, sheetPop=${sheetPop}`);
       municipalityInfo = {
         code: gsiResult.muniCd,
         name,
         population: sheetPop,
       };
+    } else {
+      console.log(`[population_mesh] GSI reverse geocoding returned null for ${parsed.lat},${parsed.lng}`);
     }
 
     // ─── Step 3: メッシュ人口（e-Stat or 推定） ───

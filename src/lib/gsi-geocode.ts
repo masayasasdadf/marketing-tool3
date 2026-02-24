@@ -23,12 +23,18 @@ export async function reverseGeocode(
     const url = `https://mreversegeocoder.gsi.go.jp/reverse-geocoder?lat=${lat}&lon=${lng}`;
     const res = await fetch(url);
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`[gsi-geocode] Failed: ${res.status} ${res.statusText}`);
+      return null;
+    }
 
     const data = await res.json();
     const results = data?.results;
 
-    if (!results?.muniCd) return null;
+    if (!results?.muniCd) {
+      console.error(`[gsi-geocode] No muniCd in response for ${lat},${lng}`);
+      return null;
+    }
 
     // muniCd is 6 digits (e.g. "131040"). Take first 5 for JIS code.
     const rawCode = String(results.muniCd);
@@ -36,8 +42,10 @@ export async function reverseGeocode(
     const prefCd = muniCd.slice(0, 2);
     const address = results.lv01Nm || "";
 
+    console.log(`[gsi-geocode] ${lat},${lng} → muniCd=${muniCd} address=${address}`);
     return { muniCd, prefCd, address };
-  } catch {
+  } catch (err) {
+    console.error(`[gsi-geocode] Error:`, err);
     return null;
   }
 }
