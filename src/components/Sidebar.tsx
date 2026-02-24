@@ -16,6 +16,7 @@ interface SidebarProps {
   loading: boolean;
   populationSummary: { total: number; average: number; max: number; cellCount: number } | null;
   populationIsEstimate?: boolean;
+  municipality?: { code: string; name: string; population: number | null } | null;
 }
 
 const LAYER_NAMES: LayerName[] = [
@@ -52,6 +53,7 @@ export default function Sidebar({
   loading,
   populationSummary,
   populationIsEstimate,
+  municipality,
 }: SidebarProps) {
   return (
     <div className="w-72 sm:w-80 bg-white border-r border-gray-200 flex flex-col h-full sidebar-scroll overflow-y-auto">
@@ -129,11 +131,31 @@ export default function Sidebar({
         </button>
       </div>
 
+      {/* Municipality info (GSI逆ジオコーディング結果) */}
+      {municipality && (
+        <div className="p-4 border-b border-gray-200">
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">所在地</h3>
+          <div className="bg-green-50 p-3 rounded-md">
+            <div className="text-sm font-bold text-green-800">{municipality.name}</div>
+            <div className="text-xs text-green-600 mt-0.5">コード: {municipality.code}</div>
+            {municipality.population !== null && (
+              <div className="mt-1.5 text-sm">
+                <span className="text-xs text-gray-500">市区町村人口: </span>
+                <span className="font-bold text-green-700">
+                  {municipality.population.toLocaleString()}人
+                </span>
+                <span className="ml-1 text-xs text-green-600 bg-green-100 px-1.5 py-0.5 rounded">国勢調査</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Population summary */}
       {populationSummary && (
         <div className="p-4 border-b border-gray-200">
           <h3 className="text-sm font-semibold text-gray-700 mb-2">
-            人口サマリ
+            商圏内人口
             {populationIsEstimate && (
               <span className="ml-1.5 text-xs font-normal text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">推定値</span>
             )}

@@ -54,6 +54,11 @@ export default function Home() {
     cellCount: number;
   } | null>(null);
   const [populationIsEstimate, setPopulationIsEstimate] = useState(false);
+  const [municipality, setMunicipality] = useState<{
+    code: string;
+    name: string;
+    population: number | null;
+  } | null>(null);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
@@ -136,6 +141,7 @@ export default function Home() {
         setPopulationCells(popData.cells);
         setPopulationSummary(popData.summary);
         setPopulationIsEstimate(popData.isEstimate || false);
+        setMunicipality(popData.municipality || null);
       }
 
       // 2. Fetch competitors
@@ -284,6 +290,7 @@ export default function Home() {
                   loading={analysisLoading}
                   populationSummary={populationSummary}
                   populationIsEstimate={populationIsEstimate}
+                  municipality={municipality}
                 />
                 <StorePanel
                   stores={stores}
