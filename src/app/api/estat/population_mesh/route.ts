@@ -111,6 +111,31 @@ export async function POST(req: NextRequest) {
       cells.push(...estimatedCells);
     }
 
+    // ─── Step 4: スプレッドシートの実人口で推定値を補正 ───
+    // 推定値が市区町村の実人口を超えている場合、スケールダウンする
+    // 推定値が実人口に比べて著しく低い場合、スケールアップする
+    if (isEstimate && municipalityInfo?.population && municipalityInfo.population > 0) {
+      const estimatedTotal = cells.reduce((sum, c) => sum + c.population, 0);
+      if (estimatedTotal > 0) {
+        const searchAreaKm2 = Math.PI * parsed.radiusKm * parsed.radiusKm;
+        // 市区町村の人口密度から、この検索範囲に妥当な人口を推定
+        // 日本の市区町村の平均面積 ≈ 人口規模に応じて異なる
+        // 小さい村: 50-100km², 市: 100-500km², 大都市: 200-1000km²
+        const realPop = municipalityInfo.population;
+        const estimatedMuniAreaKm2 = estimateMunicipalityArea(realPop);
+        const areaFraction = Math.min(1, searchAreaKm2 / estimatedMuniAreaKm2);
+        const expectedPopInArea = Math.round(realPop * areaFraction);
+
+        // 推定値が期待値から大きくずれている場合のみ補正
+        if (estimatedTotal > expectedPopInArea * 1.5 || estimatedTotal < expectedPopInArea * 0.5) {
+          const scale = expectedPopInArea / estimatedTotal;
+          for (const cell of cells) {
+            cell.population = Math.round(cell.population * scale);
+          }
+        }
+      }
+    }
+
     const populations = cells.map((c) => c.population);
     const total = populations.reduce((a, b) => a + b, 0);
     const average = cells.length > 0 ? Math.round(total / cells.length) : 0;
@@ -195,6 +220,21 @@ function meshCodeToLatLng(code: string): { lat: number; lng: number } | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 人口規模から市区町村の概算面積を推定する。
+ * 日本の市区町村データに基づく大まかなヒューリスティック。
+ */
+function estimateMunicipalityArea(population: number): number {
+  if (population < 3000) return 50;       // 小さな村: ~50 km²
+  if (population < 10000) return 100;     // 村・小さな町: ~100 km²
+  if (population < 30000) return 150;     // 町: ~150 km²
+  if (population < 50000) return 200;     // 小さな市: ~200 km²
+  if (population < 100000) return 250;    // 市: ~250 km²
+  if (population < 200000) return 300;    // 中規模市: ~300 km²
+  if (population < 500000) return 400;    // 大きな市: ~400 km²
+  return 600;                              // 政令指定都市: ~600 km²
 }
 
 /**
