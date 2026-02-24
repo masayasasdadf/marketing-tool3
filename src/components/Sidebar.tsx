@@ -156,15 +156,21 @@ export default function Sidebar({
         <div className="p-4 border-b border-gray-200">
           <h3 className="text-sm font-semibold text-gray-700 mb-2">
             商圏内人口
-            {populationIsEstimate && (
+            {populationIsEstimate && municipality?.population !== null && municipality?.population !== undefined ? (
+              <span className="ml-1.5 text-xs font-normal text-green-600 bg-green-50 px-1.5 py-0.5 rounded">データ取得済み</span>
+            ) : populationIsEstimate ? (
               <span className="ml-1.5 text-xs font-normal text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">推定値</span>
-            )}
+            ) : null}
           </h3>
-          {populationIsEstimate && (
+          {populationIsEstimate && municipality?.population !== null && municipality?.population !== undefined ? (
+            <p className="text-xs text-green-600 mb-2">
+              国勢調査データで補正済みです。
+            </p>
+          ) : populationIsEstimate ? (
             <p className="text-xs text-amber-600 mb-2">
               e-Statメッシュデータ未取得のため推定値です。実際の値とは異なる場合があります。
             </p>
-          )}
+          ) : null}
           <div className="grid grid-cols-2 gap-2 text-sm">
             <div className="bg-blue-50 p-2 rounded">
               <div className="text-xs text-gray-500">合計</div>
