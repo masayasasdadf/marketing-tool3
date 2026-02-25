@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "generatedAt": "2026-02-25T13:21:15.186Z",
+    "source": "e-Stat 国勢調査",
+    "datasets": {
+      "pop2020": null,
+      "pop2015": null,
+      "daynight2020": "0003412819"
+    },
+    "note": "scripts/fetch-population-master.mjs で生成",
+    "totalMunicipalities": 0
+  },
+  "records": []
+}
