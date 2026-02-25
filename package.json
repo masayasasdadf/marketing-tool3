@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "fetch-master": "node scripts/fetch-population-master.mjs"
+    "fetch-master": "node scripts/fetch-population-master.mjs",
+    "test-master": "node scripts/test-population-master.mjs"
   },
   "repository": {
     "type": "git",
