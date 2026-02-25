@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { DayNightItem } from "@/types";
+import { isMasterDataAvailable, getDayNight } from "@/lib/population-master";
 import { fetchSheetData } from "@/lib/sheets-reader";
 import { resolveAreaName } from "@/lib/area-name-resolver";
 
@@ -8,7 +9,27 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const prefCode = searchParams.get("prefCode") || "";
 
-    // ─── 優先: スプレッドシートから昼夜間人口データ取得 (gid=1) ───
+    // ─── 優先①: マスターデータ ───
+    if (isMasterDataAvailable()) {
+      const rows = getDayNight(prefCode || undefined).slice(0, 100);
+      const items: DayNightItem[] = rows.map((r) => ({
+        code: r.code,
+        name: r.name,
+        dayPopulation: r.dayPopulation,
+        nightPopulation: r.nightPopulation,
+        ratio: r.ratio,
+      }));
+      return NextResponse.json({
+        items,
+        supported: items.length > 0,
+        note: items.length === 0
+          ? "昼夜間人口データはこの地域では取得できませんでした。"
+          : undefined,
+        source: "マスターデータ（国勢調査 2020）",
+      });
+    }
+
+    // ─── 優先②: スプレッドシート (gid=1) ───
     const sheetData = await fetchSheetData(1);
 
     if (sheetData.length > 0) {
@@ -16,7 +37,6 @@ export async function GET(req: NextRequest) {
       const minCode = prefNum * 1000;
       const maxCode = (prefNum + 1) * 1000;
 
-      // 地域コードごとにデータをグループ化
       const itemMap = new Map<string, { dayPop: number | null; nightPop: number | null }>();
 
       for (const row of sheetData) {
@@ -29,14 +49,10 @@ export async function GET(req: NextRequest) {
         }
         const entry = itemMap.get(key)!;
 
-        // 項目コードで昼間/夜間を判別
-        // スプシの項目コードに応じて調整が必要
         const itemCode = row.itemCode;
         if (itemCode === "0" || itemCode === "0000A") {
-          // 最初の項目 = 夜間人口（常住人口）
           entry.nightPop = row.value;
         } else if (itemCode === "1" || itemCode === "0001A") {
-          // 2番目の項目 = 昼間人口
           entry.dayPop = row.value;
         }
       }
@@ -134,7 +150,6 @@ export async function GET(req: NextRequest) {
 
     const items: DayNightItem[] = [];
     for (const item of eStatMap.values()) {
-      // 名前が数字のみなら解決
       if (/^\d+$/.test(item.name)) {
         item.name = await resolveAreaName(item.code);
       }

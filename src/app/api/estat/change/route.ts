@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { PopulationChangeItem } from "@/types";
+import { isMasterDataAvailable, getPopulationChange } from "@/lib/population-master";
 import { fetchSheetData } from "@/lib/sheets-reader";
 import { resolveAreaName } from "@/lib/area-name-resolver";
 
@@ -8,7 +9,26 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const prefCode = searchParams.get("prefCode") || "";
 
-    // ─── 優先: スプレッドシートからデータ取得 ───
+    // ─── 優先①: マスターデータ ───
+    if (isMasterDataAvailable()) {
+      const rows = getPopulationChange(prefCode || undefined).slice(0, 100);
+      const changes: PopulationChangeItem[] = rows.map((r) => ({
+        code: r.code,
+        name: r.name,
+        populationOld: r.populationOld,
+        populationNew: r.populationNew,
+        change: r.change,
+        changeRate: r.changeRate,
+      }));
+      return NextResponse.json({
+        changes,
+        periodOld: "2015年",
+        periodNew: "2020年",
+        source: "マスターデータ（国勢調査）",
+      });
+    }
+
+    // ─── 優先②: スプレッドシート ───
     // Sheet gid=0 が2020年、gid=2 が2015年のデータ（あれば）
     const sheet2020 = await fetchSheetData(0);
     const sheet2015 = await fetchSheetData(2);
@@ -118,7 +138,6 @@ export async function GET(req: NextRequest) {
           oldData.population > 0
             ? Math.round((change / oldData.population) * 10000) / 100
             : 0;
-        // 名前が数字のみなら解決
         let name = newData.name;
         if (/^\d+$/.test(name)) {
           name = await resolveAreaName(code);
